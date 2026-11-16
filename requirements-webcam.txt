@@ -1,0 +1,5 @@
+# Optional LOCAL desktop companion only; does not affect Streamlit dependencies.
+-r requirements.txt
+mediapipe>=0.10.14,<1
+opencv-python>=4.8,<5
+pygame>=2.5,<3

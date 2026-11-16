@@ -1,0 +1,29 @@
+.env
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.db
+*.db-*
+google_token.json
+credentials.json
+*.zip
+.pytest_cache/
+
+# Optional MediaPipe model weights
+hand_landmarker.task
+
+venv312/
+
+# Local data and secrets that must never be published
+*.db.backup*
+*.sqlite*
+.env.*
+!.env.example
+client_secret*.json
+*.log
+
+# Not part of the app source
+ToneTutor_AI/
+presentation_video/
+.claude/
