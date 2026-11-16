@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 from browser_webcam import SENSITIVITY, parse_taps, take_new_taps
-from table_piano_core import KeyboardLayout, TapDetector
+from table_piano_core import FingerSmoother, KeyboardLayout, OneEuroFilter, TapDetector, note_at_sticky
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = ROOT / 'webcam_component' / 'webcam_piano.mjs'
@@ -99,6 +99,31 @@ class JavaScriptParityTests(unittest.TestCase):
             self.assertEqual(js, expected, name)
             if name == 'normal':   # the sequence must actually exercise taps, not only silence
                 self.assertEqual([n for n in expected if n], ['C4', 'C4', 'E4'])
+
+    def test_smoothing_and_sticky_keys_match_python(self):
+        rng = __import__('random').Random(11)
+        edge = 1000 / 14
+        track = [(round(edge + rng.gauss(0, 6), 3), round(380 + rng.gauss(0, 30), 3), round(i / 30, 4))
+                 for i in range(120)]
+        track += [(round(edge + 40 + i, 3), 200.0, round((120 + i) / 30, 4)) for i in range(30)]
+        js = self.run_js(
+            f"const L = m.buildLayout(); const s = m.makeFingerSmoother(L);\n"
+            f"const f = m.makeOneEuro();\n"
+            f"const track = {json.dumps(track)};\n"
+            "console.log(JSON.stringify({keys: track.map(([x, y, t]) => s.keyFor('R_8', x, y, t)),\n"
+            "  filt: track.map(([x, y, t]) => f(x, t)),\n"
+            "  sticky: track.map(([x, y]) => [m.noteAtSticky(L, x, y, 'C4'), m.noteAtSticky(L, x, y, 'D4'),"
+            " m.noteAtSticky(L, x, y, null)])}));")
+        layout = KeyboardLayout()
+        smoother = FingerSmoother(layout)
+        filt = OneEuroFilter()
+        for i, (x, y, t) in enumerate(track):
+            note, sx, sy = smoother.key_for('R_8', x, y, t)
+            self.assertEqual(js['keys'][i][0], note, i)
+            self.assertAlmostEqual(js['keys'][i][1], sx, places=9)
+            self.assertAlmostEqual(js['keys'][i][2], sy, places=9)
+            self.assertAlmostEqual(js['filt'][i], filt(x, t), places=9)
+            self.assertEqual(js['sticky'][i], [note_at_sticky(layout, x, y, p) for p in ('C4', 'D4', None)], i)
 
     def test_homography_maps_corners_and_round_trips(self):
         js = self.run_js(

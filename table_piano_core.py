@@ -5,6 +5,7 @@ We therefore use a heuristic approach/deceleration gesture, plus a release requi
 NOT a claim of reliable physical contact sensing.
 """
 from dataclasses import dataclass
+import math
 from typing import Optional
 
 WHITE_CLASSES = ('C', 'D', 'E', 'F', 'G', 'A', 'B')
@@ -46,6 +47,88 @@ class KeyboardLayout:
             if x1 <= x < x2 and y1 <= y < y2:
                 return note
         return None
+
+    def rect(self, note):
+        for name, box in self.blacks + self.whites:
+            if name == note:
+                return box
+        return None
+
+
+KEY_MARGIN = 7.0  # layout units (about 10% of a white key) a finger must cross before changing key
+
+
+def _inside(box, x, y, grow):
+    x1, y1, x2, y2 = box
+    return x1 - grow <= x < x2 + grow and y1 - grow <= y < y2 + grow
+
+
+def note_at_sticky(layout, x, y, previous=None, margin=KEY_MARGIN):
+    """Key under (x, y) with hysteresis, so a fingertip on a key border does not flicker.
+
+    The previous key is kept while the point stays within `margin` of it, unless the point
+    is clearly inside another key (more than `margin` past that key's edges).
+    """
+    candidate = layout.note_at(x, y)
+    if previous is None or candidate == previous:
+        return candidate
+    prev_box = layout.rect(previous)
+    if prev_box is None or not _inside(prev_box, x, y, margin):
+        return candidate
+    if candidate is not None and _inside(layout.rect(candidate), x, y, -margin):
+        return candidate
+    return previous
+
+
+class OneEuroFilter:
+    """Adaptive low-pass filter (Casiez et al., 2012): steady when still, responsive when moving.
+
+    Units follow the input (here keyboard-layout units); `beta` scales how much speed opens the filter.
+    """
+    def __init__(self, min_cutoff=1.2, beta=0.02, d_cutoff=1.0):
+        self.min_cutoff, self.beta, self.d_cutoff = min_cutoff, beta, d_cutoff
+        self.x = None
+        self.dx = 0.0
+        self.t = None
+
+    @staticmethod
+    def _alpha(cutoff, dt):
+        tau = 1.0 / (2 * math.pi * cutoff)
+        return 1.0 / (1.0 + tau / dt)
+
+    def __call__(self, x, t):
+        if self.x is None:
+            self.x, self.t = x, t
+            return x
+        dt = t - self.t if t > self.t else 1e-3
+        dx = (x - self.x) / dt
+        self.dx += self._alpha(self.d_cutoff, dt) * (dx - self.dx)
+        cutoff = self.min_cutoff + self.beta * abs(self.dx)
+        self.x += self._alpha(cutoff, dt) * (x - self.x)
+        self.t = t
+        return self.x
+
+
+class FingerSmoother:
+    """Per-finger One Euro filters for the key-aiming point, plus each finger's sticky key."""
+    def __init__(self, layout, margin=KEY_MARGIN, **filter_args):
+        self.layout, self.margin, self.filter_args = layout, margin, filter_args
+        self.fingers = {}
+
+    def key_for(self, finger_id, x, y, t):
+        """Return (note, smoothed_x, smoothed_y) for one fingertip in layout coordinates."""
+        f = self.fingers.get(finger_id)
+        if f is None:
+            f = self.fingers[finger_id] = {'fx': OneEuroFilter(**self.filter_args),
+                                           'fy': OneEuroFilter(**self.filter_args), 'note': None}
+        sx, sy = f['fx'](x, t), f['fy'](y, t)
+        f['note'] = note_at_sticky(self.layout, sx, sy, f['note'], self.margin)
+        return f['note'], sx, sy
+
+    def forget_missing(self, visible_keys):
+        for key in list(self.fingers):
+            if key not in visible_keys:
+                del self.fingers[key]
 
 
 @dataclass

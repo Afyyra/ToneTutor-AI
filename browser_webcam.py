@@ -23,9 +23,11 @@ HTML = '''<div class="ttw">
     <span class="ttw-status">Camera off</span>
   </div>
   <div class="ttw-stage"><video playsinline muted></video><canvas width="1280" height="720"></canvas></div>
-  <div class="ttw-help">Place your hands over a table in view of the camera. The keys are drawn on the picture:
-  tap a key firmly and lift your finger before the next note. Use <b>Calibrate corners</b> to fit the keys to a
-  paper keyboard or table area (click top-left, top-right, bottom-right, bottom-left as you see them).
+  <div class="ttw-help">Place your hands over a table in view of the camera. The keys are drawn on the picture,
+  and the key each fingertip is aiming at lights up yellow. Tap a key firmly and lift your finger before the next
+  note. Use <b>Calibrate corners</b> to fit the keys to a paper keyboard or table area (click top-left, top-right,
+  bottom-right, bottom-left as you see them), then drag the yellow corner handles to fine-tune.
+  For the best precision: good front lighting, a plain matte table, and the camera looking down at an angle.
   Video never leaves this device; only the note names you play are sent to ToneTutor.</div>
 </div>'''
 CSS = '''
@@ -39,7 +41,7 @@ CSS = '''
 .ttw-stage {position:relative; width:100%; max-width:880px; aspect-ratio:16/9; background:#151a24;
   border-radius:10px; overflow:hidden;}
 .ttw-stage video {position:absolute; width:1px; height:1px; opacity:0; pointer-events:none;}
-.ttw-stage canvas {display:block; width:100%; height:100%; cursor:crosshair;}
+.ttw-stage canvas {display:block; width:100%; height:100%; cursor:crosshair; touch-action:none;}
 .ttw-help {font-size:12px; opacity:.75; margin-top:6px; max-width:880px; line-height:1.45;}
 '''
 WEBCAM = st.components.v2.component('tonetutor_browser_webcam', html=HTML, css=CSS, js=JS)

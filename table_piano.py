@@ -10,7 +10,7 @@ import argparse
 from pathlib import Path
 import time
 
-from table_piano_core import FINGERTIPS, TIP_TO_MCP, KeyboardLayout, TapDetector
+from table_piano_core import FINGERTIPS, TIP_TO_MCP, FingerSmoother, KeyboardLayout, TapDetector
 from webcam_session import frame_is_black, open_camera
 
 MODEL_URL = ('https://storage.googleapis.com/mediapipe-models/hand_landmarker/'
@@ -123,6 +123,7 @@ def main(argv=None):
     corners = []
     homography = None
     layout = KeyboardLayout(octaves=args.octaves)
+    smoother = FingerSmoother(layout)  # steadier aiming and sticky key borders
     detector = TapDetector(
         min_down_y={'low':9.0, 'normal':6.0, 'high':3.8}[args.sensitivity],
         min_depth_delta={'low':0.020, 'normal':0.014, 'high':0.008}[args.sensitivity],
@@ -185,6 +186,7 @@ def main(argv=None):
                     else:
                         homography = cv2.getPerspectiveTransform(src, target)
                         detector.states.clear()
+                        smoother.fingers.clear()
                         state['message'] = 'Calibrated desk area. Press C to recalibrate.'
 
                 if homography is not None:
@@ -229,9 +231,10 @@ def main(argv=None):
                             hit_x = (px - bx) * layout.width / bw
                             hit_y = (py - by) * layout.height / bh
                             vx, vy = round(px), round(py)
-                        note = layout.note_at(hit_x, hit_y)
-                        relative_z = lm.z - landmarks[TIP_TO_MCP[tip]].z
                         finger_key = (hand_side, tip)
+                        # Smoothed point picks the key; raw motion still drives tap detection.
+                        note, _, _ = smoother.key_for(finger_key, hit_x, hit_y, now)
+                        relative_z = lm.z - landmarks[TIP_TO_MCP[tip]].z
                         observed.add(finger_key)
                         played = detector.update(finger_key, note, hit_y, relative_z, now)
                         dot_color = (60, 255, 90) if played else (50, 180, 255)
@@ -265,6 +268,7 @@ def main(argv=None):
                                 except ValueError as exc:
                                     state['message'] = str(exc)[:110]
                 detector.forget_missing(observed)
+                smoother.forget_missing(observed)
 
                 if homography is None:
                     for i, (x, y) in enumerate(corners):
@@ -290,6 +294,7 @@ def main(argv=None):
                     corners.clear()
                     homography = None
                     detector.states.clear()
+                    smoother.fingers.clear()
                     state['message'] = 'Calibration cleared. Click 4 desk corners.'
                 if key == ord('j') and args.mode == 'jam':
                     notes = state['jam_notes']

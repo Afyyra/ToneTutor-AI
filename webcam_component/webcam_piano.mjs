@@ -45,6 +45,56 @@ export function noteAt(layout, x, y) {
   return null;
 }
 
+export const KEY_MARGIN = 7.0;   // layout units a fingertip must cross before changing key
+
+export function rectOf(layout, note) {
+  for (const [name, x1, y1, x2, y2] of layout.blacks.concat(layout.whites)) if (name === note) return [x1, y1, x2, y2];
+  return null;
+}
+function inside(box, x, y, grow) {
+  const [x1, y1, x2, y2] = box;
+  return x1 - grow <= x && x < x2 + grow && y1 - grow <= y && y < y2 + grow;
+}
+// Key under (x, y) with hysteresis so a fingertip on a key border does not flicker (port of note_at_sticky).
+export function noteAtSticky(layout, x, y, previous = null, margin = KEY_MARGIN) {
+  const candidate = noteAt(layout, x, y);
+  if (previous === null || candidate === previous) return candidate;
+  const prevBox = rectOf(layout, previous);
+  if (prevBox === null || !inside(prevBox, x, y, margin)) return candidate;
+  if (candidate !== null && inside(rectOf(layout, candidate), x, y, -margin)) return candidate;
+  return previous;
+}
+
+// Adaptive low-pass filter (One Euro, Casiez et al. 2012): steady when still, responsive when moving.
+export function makeOneEuro(minCutoff = 1.2, beta = 0.02, dCutoff = 1.0) {
+  let x = null, dx = 0, last = null;
+  const alpha = (cutoff, dt) => 1 / (1 + (1 / (2 * Math.PI * cutoff)) / dt);
+  return (value, t) => {
+    if (x === null) { x = value; last = t; return value; }
+    const dt = t > last ? t - last : 1e-3;
+    dx += alpha(dCutoff, dt) * ((value - x) / dt - dx);
+    x += alpha(minCutoff + beta * Math.abs(dx), dt) * (value - x);
+    last = t;
+    return x;
+  };
+}
+
+// Per-finger smoothed aiming point and sticky key (port of FingerSmoother).
+export function makeFingerSmoother(layout, margin = KEY_MARGIN) {
+  const fingers = new Map();
+  return {
+    fingers,
+    keyFor(id, x, y, t) {
+      let f = fingers.get(id);
+      if (!f) { f = { fx: makeOneEuro(), fy: makeOneEuro(), note: null }; fingers.set(id, f); }
+      const sx = f.fx(x, t), sy = f.fy(y, t);
+      f.note = noteAtSticky(layout, sx, sy, f.note, margin);
+      return [f.note, sx, sy];
+    },
+    forgetMissing(visible) { for (const id of [...fingers.keys()]) if (!visible.has(id)) fingers.delete(id); },
+  };
+}
+
 // One press per downstroke: approach, settle on the same key, then lift to rearm.
 export function makeTapDetector(params = {}) {
   const P = Object.assign({}, DEFAULT_PARAMS, params);
@@ -141,7 +191,8 @@ function createController(root) {
     raf: 0, H: null, Hinv: null, clicks: null, dots: [], taps: [], seq: 0,
     nonce: Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
     lastVideoTime: -1, lastTs: -1, played: null, playedUntil: 0, audio: null, autostarted: false,
-    detector: makeTapDetector(),
+    detector: makeTapDetector(), smoother: makeFingerSmoother(layout), hover: new Set(),
+    cornerPts: null, drag: -1, tsOffset: 0,
   };
 
   const setStatus = (text) => { statusEl.textContent = text; };
@@ -155,7 +206,8 @@ function createController(root) {
   function setCorners(pts) {
     const h = homography(pts, corners), hi = homography(corners, pts);
     if (!h || !hi) { setStatus('Those corners do not form a usable area. Try again.'); return false; }
-    S.H = h; S.Hinv = hi; S.detector.states.clear();
+    S.H = h; S.Hinv = hi; S.cornerPts = pts.map((p) => [p[0], p[1]]);
+    S.detector.states.clear(); S.smoother.fingers.clear();
     return true;
   }
   function defaultCorners() {
@@ -199,19 +251,23 @@ function createController(root) {
     const size = Math.max(10, canvas.width / 85);
     ctx.font = `600 ${size}px sans-serif`; ctx.textAlign = 'center';
     const quad = (x1, y1, x2, y2) => [[x1, y1], [x2, y1], [x2, y2], [x1, y2]].map(([x, y]) => applyH(S.Hinv, x, y));
+    // Priority: just played > key a fingertip is aiming at > target > plain.
     for (const [note, x1, y1, x2, y2] of layout.whites) {
-      const fill = note === flash ? 'rgba(105,238,155,0.62)' : note === target ? 'rgba(120,180,252,0.55)' : 'rgba(255,255,255,0.20)';
+      const fill = note === flash ? 'rgba(105,238,155,0.62)' : S.hover.has(note) ? 'rgba(255,214,90,0.45)'
+        : note === target ? 'rgba(120,180,252,0.55)' : 'rgba(255,255,255,0.20)';
       drawPolygon(quad(x1, y1, x2, y2), fill, 'rgba(30,34,51,0.75)');
       if (!hide) { const [lx, ly] = applyH(S.Hinv, (x1 + x2) / 2, y2 - 18); ctx.fillStyle = '#1d2233'; ctx.fillText(note, lx, ly); }
     }
     for (const [note, x1, y1, x2, y2] of layout.blacks) {
-      const fill = note === flash ? 'rgba(65,205,115,0.78)' : note === target ? 'rgba(90,120,235,0.78)' : 'rgba(20,25,37,0.55)';
+      const fill = note === flash ? 'rgba(65,205,115,0.78)' : S.hover.has(note) ? 'rgba(210,165,40,0.82)'
+        : note === target ? 'rgba(90,120,235,0.78)' : 'rgba(20,25,37,0.55)';
       drawPolygon(quad(x1, y1, x2, y2), fill, null);
     }
   }
 
+  // t is the camera frame's own media time, so tap speeds are measured between real frames.
   function handleHands(res, t) {
-    const seen = new Set(), dots = [];
+    const seen = new Set(), dots = [], hover = new Set();
     const hands = res.landmarks || [];
     const sides = res.handedness || res.handednesses || [];
     hands.forEach((lms, hi) => {
@@ -222,13 +278,17 @@ function createController(root) {
         const [kx, ky] = applyH(S.H, x, y);
         const id = side + '_' + tip;
         seen.add(id);
-        const played = S.detector.update(id, noteAt(layout, kx, ky), ky, lm.z - base.z, t);
+        // The smoothed point picks the key (steady, sticky borders); raw motion drives the tap.
+        const [note] = S.smoother.keyFor(id, kx, ky, t);
+        if (note) hover.add(note);
+        const played = S.detector.update(id, note, ky, lm.z - base.z, t);
         dots.push([x, y, !!played]);
         if (played) onTap(played);
       }
     });
     S.detector.forgetMissing(seen);
-    S.dots = dots;
+    S.smoother.forgetMissing(seen);
+    S.dots = dots; S.hover = hover;
   }
 
   function drawOverlay() {
@@ -240,6 +300,14 @@ function createController(root) {
       S.clicks.forEach(([x, y], i) => {
         ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fillStyle = '#ffc800'; ctx.fill();
         ctx.fillStyle = '#fff'; ctx.fillText(String(i + 1), x + 16, y + 4);
+      });
+    } else if (S.cornerPts) {
+      // Drag handles: fine-tune the keyboard to the table without recalibrating.
+      const r = Math.max(8, canvas.width / 110);
+      S.cornerPts.forEach(([x, y], i) => {
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = i === S.drag ? 'rgba(255,200,0,0.95)' : 'rgba(255,200,0,0.55)'; ctx.fill();
+        ctx.lineWidth = 2; ctx.strokeStyle = '#1d2233'; ctx.stroke();
       });
     }
   }
@@ -259,8 +327,9 @@ function createController(root) {
     ctx.save(); ctx.translate(w, 0); ctx.scale(-1, 1); ctx.drawImage(video, 0, 0, w, h); ctx.restore();
     if (video.currentTime !== S.lastVideoTime && S.landmarker) {
       S.lastVideoTime = video.currentTime;
-      const ts = Math.max(S.lastTs + 1, Math.round(nowMs)); S.lastTs = ts;
-      try { handleHands(S.landmarker.detectForVideo(video, ts), nowMs / 1000); }
+      // Timestamp each detection with the frame's capture time, not the screen refresh time.
+      const ts = Math.max(S.lastTs + 1, S.tsOffset + Math.round(video.currentTime * 1000)); S.lastTs = ts;
+      try { handleHands(S.landmarker.detectForVideo(video, ts), ts / 1000); }
       catch (err) { setStatus('Hand tracking error: ' + (err && err.message)); }
     }
     drawKeys(nowMs);
@@ -292,9 +361,12 @@ function createController(root) {
       }
       setStatus('Asking for camera permission...');
       S.stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, audio: false });
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 }, facingMode: 'user' },
+        audio: false });
       video.srcObject = S.stream;
       await video.play();
+      // A restarted stream begins its clock at zero, but MediaPipe needs ever-increasing timestamps.
+      S.tsOffset = S.lastTs + 1; S.lastVideoTime = -1;
       canvas.width = video.videoWidth || 1280; canvas.height = video.videoHeight || 720;
       if (!S.H) defaultCorners();
       setStatus('Loading hand tracking (first time can take a few seconds)...');
@@ -320,7 +392,8 @@ function createController(root) {
     S.running = false;
     cancelAnimationFrame(S.raf);
     stopTracks();
-    S.dots = []; S.clicks = null; S.detector.states.clear();
+    S.dots = []; S.clicks = null; S.drag = -1; S.hover = new Set();
+    S.detector.states.clear(); S.smoother.fingers.clear();
     if (fromUser && S.setState) S.setState('status', 'stopped');
     drawIdle('Camera off · press Start camera');
     setStatus('Camera off');
@@ -337,6 +410,34 @@ function createController(root) {
     if (polygonArea(pts) < 2000) { setStatus('That area is too small. Press Calibrate corners and try again.'); return; }
     if (setCorners(pts)) setStatus('Calibrated. Tap a key and lift your finger before the next one.');
   });
+  // Drag a yellow corner handle to fine-tune where the keys sit on the table.
+  const toCanvas = (ev) => {
+    const r = canvas.getBoundingClientRect();
+    return [(ev.clientX - r.left) * canvas.width / r.width, (ev.clientY - r.top) * canvas.height / r.height, canvas.width / r.width];
+  };
+  canvas.addEventListener('pointerdown', (ev) => {
+    if (S.clicks || !S.cornerPts || !S.running) return;
+    const [x, y, scale] = toCanvas(ev);
+    let best = -1, bestD = 28 * scale;
+    S.cornerPts.forEach(([cx, cy], i) => { const d = Math.hypot(cx - x, cy - y); if (d < bestD) { best = i; bestD = d; } });
+    if (best < 0) return;
+    S.drag = best; canvas.setPointerCapture(ev.pointerId); ev.preventDefault();
+  });
+  canvas.addEventListener('pointermove', (ev) => {
+    if (S.drag < 0) return;
+    const [x, y] = toCanvas(ev);
+    const pts = S.cornerPts.map((p) => [p[0], p[1]]);
+    pts[S.drag] = [x, y];
+    if (polygonArea(pts) >= 2000) setCorners(pts);
+  });
+  const endDrag = (ev) => {
+    if (S.drag < 0) return;
+    S.drag = -1;
+    if (canvas.hasPointerCapture(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId);
+    setStatus('Corner moved. Tap a key to check the fit.');
+  };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
   btn.start.onclick = () => start();
   btn.stop.onclick = () => stop(true);
   btn.def.onclick = () => { S.clicks = null; defaultCorners(); setStatus('Using the default area in the lower part of the picture.'); };
