@@ -92,3 +92,21 @@ This source also includes an **optional local desktop camera companion** impleme
 The MediaPipe table piano is now an **input method inside AI Piano Coach**, not a separate training mode. Choose **Piano → AI Piano Coach → Guided Missions/Creative Jam → Webcam table piano (MediaPipe)**. You can plan a mission and launch the local OpenCV camera with **one button**. Progress is displayed automatically inside Streamlit, and completed webcam missions inform the next Gemini-selected mission. Creative Jam directions from the webcam are visible in the same page.
 
 The webcam preview still opens in its own local desktop window for table calibration and finger tracking; it is **not a live browser video stream**. Video remains local. Only note names, scores and coaching decisions are stored. See `UNIFIED_WEBCAM_COACH_SETUP.md` for Windows installation and the **Python 3.12** fix for Pygame. MediaPipe, OpenCV and Pygame are optional added libraries; the original Python/Streamlit/Gemini framework is unchanged.
+
+## Webcam piano in the browser (works online)
+
+Every piano mode, including AI Piano Coach, now offers three inputs under **How will you play?**:
+
+- **On-screen piano**: click the keys.
+- **Webcam in browser (works online)**: the camera, MediaPipe hand tracking and tap detection run inside the learner's own browser (`webcam_component/webcam_piano.mjs`). Only the note names that are tapped are sent to Python, so it also works when ToneTutor is hosted online. Keys are drawn in perspective over the live picture of your table; use **Calibrate corners** to fit them to a paper keyboard or table area.
+- **Webcam window (this laptop only)**: the original OpenCV desktop window (`table_piano.py`). It uses the camera of the computer running Streamlit, so it cannot work on a hosted app.
+
+The browser webcam needs Chrome or Edge on an `https://` or `localhost` page and camera permission. The first start downloads the MediaPipe hand model (a few seconds). Python still checks every answer and mission exactly as for on-screen key presses. Its keyboard layout and tap detector are ports of `table_piano_core.py`, and `tests/test_browser_webcam.py` checks them against the Python originals (using Node.js when available).
+
+## Deploy online (Streamlit Community Cloud)
+
+1. Sign in at share.streamlit.io with GitHub and choose **Create app**.
+2. Pick this repository, branch `main`, main file `app.py`, and Python 3.12 under **Advanced settings**.
+3. Optional: add `GEMINI_API_KEY` and `GEMINI_MODEL` under **Secrets**. Without a key the app runs on the offline rules.
+
+On a hosted app all visitors share one SQLite database that may reset when the app restarts, every visitor's AI planning uses the configured Gemini key, and Google Calendar sign-in is not available.

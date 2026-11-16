@@ -295,10 +295,15 @@ def start_coach_mission(learner_id,drill_id,notes,reason):
         return {'id':cursor.lastrowid,'drill_id':drill_id,'notes':list(notes),'reason':reason}
 
 
-def complete_coach_mission(learner_id,mission_id,presses):
+COACH_INPUT_SOURCES=('on_screen','browser_webcam')
+
+
+def complete_coach_mission(learner_id,mission_id,presses,input_source='on_screen'):
     """Save a full keyboard trace and objective note accuracy in one transaction."""
     if not isinstance(mission_id,int) or mission_id<=0:
         raise ValueError('Invalid mission ID')
+    if input_source not in COACH_INPUT_SOURCES:
+        raise ValueError('Invalid input source')
     if not isinstance(presses,list) or not 1<=len(presses)<=80 or any(n not in ALL_KEYS for n in presses):
         raise ValueError('Invalid piano note trace')
     with connection() as c:
@@ -317,7 +322,7 @@ def complete_coach_mission(learner_id,mission_id,presses):
         if progress!=len(targets):raise ValueError('Finish all required notes before saving a result')
         outcome={'drill_id':row['drill_id'],'notes_completed':progress,'attempted_notes':len(presses),
                  'mistakes':len(presses)-progress,'accuracy':round(progress/len(presses),3),
-                 'events':events}
+                 'events':events,'input_source':input_source}
         c.execute("UPDATE piano_coach_missions SET status='completed',outcome_json=?,completed_at=CURRENT_TIMESTAMP WHERE id=? AND status='active'",
                   (json.dumps(outcome),mission_id))
     return outcome
