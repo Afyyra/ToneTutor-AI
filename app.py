@@ -17,7 +17,6 @@ from music import LESSONS, LESSON_BY_ID, PITCH_CLASSES, ALL_KEYS, note_info, sca
 from notation import staff_svg, rhythm_svg
 from piano_widget import render_piano, render_piano_event
 from piano_coach import GOALS, next_piano_mission, public_mission, process_piano_press, respond_to_jam
-from webcam_session import webcam_requirements, launch_webcam, stop_webcam, preview_frame, MODEL_URL
 from browser_webcam import browser_webcam_piano
 
 load_dotenv()
@@ -103,8 +102,7 @@ def render_question(learner,assessment=False):
         if st.session_state.get('last_exercise_id')!=ex['id']:
             st.session_state.piano_steps=[]
             st.session_state.last_exercise_id=ex['id']
-            # Only webcam taps made after this exercise appeared count towards its answer.
-            st.session_state.exercise_tap_cursor=db.latest_webcam_tap_id(learner)
+
         pressed=render_piano(key='exercise-piano-'+ex['id'],hide_labels=(ex['type']=='melody_repeat'))
         if pressed in ALL_KEYS and len(st.session_state.piano_steps)<12:
             st.session_state.piano_steps.append(pressed)
@@ -116,10 +114,6 @@ def render_question(learner,assessment=False):
             room=max(0,12-len(st.session_state.piano_steps))
             st.session_state.piano_steps.extend(tapped[:room])
             piano_answer(learner,ex,assessment)
-        elif webcam_free_running(learner):
-            st.info('📷 Webcam table piano is on: tap the notes on your table and they are entered below '
-                    'automatically. You can still click the keys above.')
-            live_piano_answer(learner,ex,assessment)
         else:
             piano_answer(learner,ex,assessment)
         return
@@ -138,29 +132,15 @@ def submit_answer(learner,ex,selected,assessment):
     except Exception as exc:st.error(str(exc))
 
 
-def piano_answer(learner,ex,assessment,live=False):
-    """Played sequence, clear and submit for piano exercises; `live` also pulls in webcam taps."""
-    if live:
-        new=db.webcam_taps_since(learner,st.session_state.get('exercise_tap_cursor',0),limit=50)
-        if new:
-            st.session_state.exercise_tap_cursor=new[-1]['id']
-            room=max(0,12-len(st.session_state.piano_steps))
-            st.session_state.piano_steps.extend(t['note'] for t in new[:room])
+def piano_answer(learner,ex,assessment):
+    """Played sequence, clear and submit for piano exercises."""
     st.caption('Played: '+(' → '.join(st.session_state.piano_steps) or 'nothing yet'))
     if st.button('Clear played sequence',key='clear-'+ex['id']):
         st.session_state.piano_steps=[]
-        st.session_state.exercise_tap_cursor=db.latest_webcam_tap_id(learner)
         st.rerun()
     selected=list(st.session_state.piano_steps)
     if st.button('Submit answer',type='primary',key='submit-'+ex['id'],disabled=not bool(selected)):
         submit_answer(learner,ex,selected,assessment)
-
-
-@st.fragment(run_every='1s')
-def live_piano_answer(learner,ex,assessment):
-    """Refreshes every second so webcam taps appear without a full page rerun."""
-    piano_answer(learner,ex,assessment,live=True)
-
 
 def show_feedback(learner,is_assessment=False):
     fb=st.session_state.feedback
@@ -321,11 +301,8 @@ def show_training(learner,mode):
 
 INPUT_SCREEN='On-screen piano'
 INPUT_BROWSER='Webcam in browser (works online)'
-INPUT_WINDOW='Webcam window (this laptop only)'
-INPUT_OPTIONS=[INPUT_SCREEN,INPUT_BROWSER,INPUT_WINDOW]
-INPUT_HELP=('Webcam in browser runs the camera and hand tracking in your own browser, so it also works on the '
-            'online app. Webcam window opens a separate desktop camera window and only works on the laptop '
-            'running ToneTutor.')
+INPUT_OPTIONS=[INPUT_SCREEN,INPUT_BROWSER]
+INPUT_HELP='Webcam in browser runs the camera and hand tracking in your own browser, so it also works on the online app.'
 
 
 def show_piano_jam(learner, use_browser_webcam=False):
@@ -390,17 +367,6 @@ def show_piano_coach(learner):
                     key='coach_studio')
     input_method=st.radio('How will you play?',INPUT_OPTIONS,horizontal=True,key='coach_input_method',
                           help=INPUT_HELP)
-    if input_method==INPUT_WINDOW:
-        show_webcam_piano(learner,studio)
-        return
-    camera_session=st.session_state.get('webcam_session')
-    if camera_session and camera_session.is_running():
-        st.warning('A webcam coach is still running. Stop the webcam before using the on-screen piano '
-                   'for the same mission, so taps are not counted twice.')
-        if st.button('Stop my webcam before switching input',key='stop-for-screen'):
-            stop_webcam(camera_session)
-            st.rerun()
-        return
     use_browser=input_method==INPUT_BROWSER
     if use_browser:
         st.selectbox('Tap sensitivity',['normal','high','low'],key='bw_sensitivity')
@@ -514,275 +480,11 @@ def show_piano_coach(learner):
         st.session_state.coach_outcome=None
         st.rerun()
 
-
-
-@st.fragment(run_every='1s')
-def webcam_coach_live_status(learner, studio):
-    """Auto-refresh note-by-note progress; no full Streamlit page reruns needed."""
-    session=st.session_state.get('webcam_session')
-    if session is not None:
-        if session.is_running():
-            st.caption('📷 Webcam is running locally in its camera window · learner '+learner+
-                       ' · '+('Gemini requested' if session.controller=='gemini' else 'Offline rules'))
-        else:
-            st.caption('Webcam window is closed. You can launch it again below.')
-            log=session.recent_log(8)
-            if log and ('Traceback' in log or 'Error:' in log or 'RuntimeError:' in log):
-                with st.expander('Camera startup / runtime error'):
-                    st.code(log,language='text')
-    if studio=='Creative Jam':
-        feedback=db.latest_webcam_jam_feedback(learner)
-        if feedback:
-            st.success('🎶 Latest creative direction: '+feedback['title'])
-            st.write(feedback['prompt'])
-            if feedback.get('reason'): st.caption('Why: '+feedback['reason'])
-            if feedback.get('warning'): st.warning(feedback['warning'])
-            st.caption('Chosen by: '+str(feedback.get('mode','unknown'))+
-                       ' · recorded '+str(feedback.get('created_at','')))
-        else:
-            st.info('Play 3–20 notes on the webcam keyboard, then press J in the camera window '
-                    'to request a creative direction. It will appear here automatically.')
-        history=db.jam_history(learner,1)
-        if history:
-            st.caption('Last recorded phrase: '+' → '.join(history[0]['notes']))
-        return
-    mission=db.coach_active(learner)
-    if mission:
-        data=public_mission(mission)
-        status=db.table_piano_progress(learner,mission['id'])
-        done=status['correct_notes']
-        st.markdown('#### '+data['title'])
-        st.write('**AI coaching reason:** '+data['reason'])
-        st.caption('Goal: '+data['goal']+' · Difficulty: '+data['difficulty'])
-        st.write('**Target notes:** '+' → '.join(data['notes']))
-        st.progress(done/len(data['notes']),text=f'Live webcam progress: {done}/{len(data["notes"])} correct keys')
-        st.info('**Next key:** '+data['notes'][done])
-        st.caption('Detected taps: '+str(status['presses'])+' · Wrong keys: '+str(status['mistakes'])+
-                   (' · Last played: '+status['last_note'] if status['last_note'] else ''))
-        if status['events']:
-            st.caption('Latest: '+' | '.join(('✓ ' if e['correct'] else '✗ ')+e['note']
-                        for e in status['events'][-8:]))
-        return
-    history=db.coach_history(learner,1)
-    if history and history[0].get('input_source')=='mediapipe_webcam':
-        last=history[0]
-        st.success('✅ Webcam mission completed · '+str(round(last['accuracy']*100))+
-                   '% note accuracy · '+str(last['mistakes'])+' wrong taps')
-    else:
-        st.info('No active mission yet. Ask the coach to plan your first webcam exercise.')
-    if session and session.is_running():
-        if st.button('🎯 Ask AI for the next webcam mission',type='primary',key='webcam-next'):
-            with st.spinner('Evaluating the last mission and selecting a new practice pattern...'):
-                result=next_piano_mission(learner,st.session_state.tutor_mode,
-                                          st.session_state.get('webcam_coach_goal','Automatic'))
-            st.session_state.coach_warning=result.get('warning')
-            st.rerun()
-
-
-DEVICE_HELP=('Laptops often list more than one camera, for example the built-in camera and a phone-camera '
-             'app such as Camo. Use “Preview this camera” to see which number is which.')
-PIANO_EXERCISE_MODES=('Follow the Notes','Note Challenge','Melody Practice')
-
-
-def camera_preview(index, key):
-    """One local still so learners can tell their laptop camera from virtual cameras."""
-    if st.button('👁 Preview this camera',key='preview-'+key):
-        try:
-            with st.spinner('Opening camera '+str(index)+'...'):
-                image,backend=preview_frame(index)
-            st.image(image,caption=f'Camera {index} via {backend}. This still is shown here only and never saved.',
-                     width=360)
-        except Exception as exc:
-            st.error('Camera '+str(index)+' preview failed: '+str(exc))
-
-
-def show_camera_log(session):
-    log=session.recent_log(8) if session else ''
-    if log and ('Traceback' in log or 'Error:' in log or 'RuntimeError:' in log):
-        with st.expander('Camera startup / runtime error'):
-            st.code(log,language='text')
-
-
-def webcam_free_running(learner):
-    """True while the free-play camera is sending taps for this learner."""
-    session=st.session_state.get('webcam_session')
-    return bool(session and session.is_running() and session.mode=='free' and session.learner==learner)
-
-
-@st.fragment(run_every='1s')
-def webcam_tap_feed(learner, piano_mode):
-    """Live view of webcam taps on the Piano page (refreshes without rerunning the whole page)."""
-    if not webcam_free_running(learner):
-        st.caption('Webcam window is closed. Start it again above.')
-        show_camera_log(st.session_state.get('webcam_session'))
-        return
-    taps=db.webcam_taps_since(learner,st.session_state.get('webcam_feed_cursor',0),limit=300)
-    recent=[t['note'] for t in taps][-10:]
-    if piano_mode=='Learn the Notes':
-        target=st.session_state.get('learn_note')
-        if not recent:
-            st.info('Tap **'+str(target)+'** on your table keyboard.')
-        elif recent[-1]==target:
-            st.success('✅ '+target+' — that is the correct key.')
-        else:
-            st.warning('You played '+recent[-1]+'. The selected note is '+str(target)+'.')
-    elif piano_mode in PIANO_EXERCISE_MODES:
-        st.info('Ask the tutor for a piano exercise. On the Training page, your table taps are '
-                'entered as your answer automatically.')
-    st.caption('📷 Webcam taps: '+(' → '.join(recent) if recent else 'none yet'))
-
-
-def show_webcam_freeplay(learner, piano_mode):
-    """Webcam input for every Piano mode outside the AI Piano Coach."""
-    st.subheader('📷 Webcam table piano · MediaPipe')
-    st.caption('Tap notes on a table instead of clicking keys. Each detected tap counts as a key press here '
-               'and in piano exercises on the Training page. Python still checks every answer, and no video '
-               'leaves this laptop.')
-    current=st.session_state.get('webcam_session')
-    if current and current.learner!=learner:
-        stop_webcam(current)
-        st.session_state.pop('webcam_session',None)
-        current=None
-    if current and current.is_running() and current.mode!='free':
-        st.warning('The camera is running for the AI Piano Coach. Stop it to use the webcam here.')
-        if st.button('Stop coach camera',key='stop-coach-for-free'):
-            stop_webcam(current)
-            st.rerun()
-        return
-    issues=webcam_requirements()
-    if issues:
-        st.error('Webcam setup needed: '+' '.join(issues))
-        st.code('python -m pip install -r requirements-webcam.txt\n'
-                'Invoke-WebRequest -Uri "'+MODEL_URL+'" -OutFile "hand_landmarker.task"',
-                language='powershell')
-        return
-    if not (current and current.is_running()):
-        a,b=st.columns(2)
-        with a:
-            camera_index=st.selectbox('Webcam device number',[0,1,2,3],key='free_webcam_device',help=DEVICE_HELP)
-        with b:
-            sensitivity=st.selectbox('Tap sensitivity',['normal','high','low'],key='free_webcam_sensitivity')
-        camera_preview(camera_index,'free')
-        if st.button('📷 Start webcam piano',type='primary',key='start-free-webcam'):
-            try:
-                st.session_state.webcam_feed_cursor=db.latest_webcam_tap_id(learner)
-                st.session_state.webcam_session=launch_webcam(learner,mode='free',
-                                                              controller=st.session_state.tutor_mode,
-                                                              camera=camera_index,sensitivity=sensitivity)
-                st.rerun()
-            except (ValueError,RuntimeError,OSError) as exc:
-                st.error('Could not start the webcam: '+str(exc))
-        show_camera_log(current)
-        return
-    st.caption('In the camera window, click the four table corners in order: top-left → top-right → '
-               'bottom-right → bottom-left. Press C to recalibrate and Q to close.')
-    a,b=st.columns(2)
-    with a:
-        if st.button('Stop webcam',key='stop-free-webcam'):
-            stop_webcam(current)
-            st.rerun()
-    with b:
-        if st.button('Force close unresponsive camera',key='force-stop-free-webcam'):
-            stop_webcam(current,force=True)
-            st.rerun()
-    webcam_tap_feed(learner,piano_mode)
-
-
-def show_webcam_piano(learner, studio='Guided Missions'):
-    """One Piano Coach workflow: the camera is a choice of input, not another tutor."""
-    st.subheader('📷 AI Webcam Piano Coach · MediaPipe')
-    st.caption('Your coach chooses approved note missions, the webcam tracks your fingertips, '
-               'Python checks the played notes, and the next coaching decision uses the saved performance. '
-               'No video or hand images are sent to Gemini.')
-    current=st.session_state.get('webcam_session')
-    if current and current.learner!=learner:
-        stop_webcam(current)
-        st.session_state.pop('webcam_session',None)
-        current=None
-    requested_mode='coach' if studio=='Guided Missions' else 'jam'
-    if current and current.is_running() and current.mode!=requested_mode:
-        st.warning('The camera is currently running in '+current.mode+' mode. Stop it before '
-                   'switching between Guided Missions and Creative Jam.')
-        if st.button('Stop camera to change studio',key='stop-to-change-studio'):
-            stop_webcam(current)
-            st.rerun()
-        return
-    with st.expander('Webcam calibration, setup and limits',expanded=False):
-        st.write('Use the **same laptop** for Streamlit and the webcam. A camera window opens '
-                 'when you press Start below. Click the **four corners** of the table piano '
-                 'in this order: **top-left → top-right → bottom-right → bottom-left**.')
-        st.write('Press **C** to recalibrate, **Q** to close the camera, and **J** to submit '
-                 'a Creative Jam phrase. A fixed camera and printed paper-keyboard guide help.')
-        st.warning('One RGB webcam cannot directly measure finger-to-table contact. '
-                   'Taps are estimated from fingertip motion, so false or missed notes are possible.')
-        st.caption('Webcam mode is local-only: this controls the webcam of the laptop '
-                   'running Streamlit, not a remote web visitor’s camera.')
-    issues=webcam_requirements()
-    if issues:
-        st.error('Webcam setup needed: '+' '.join(issues))
-        st.code('python -m pip install -r requirements-webcam.txt\n'
-                'Invoke-WebRequest -Uri "'+MODEL_URL+'" -OutFile "hand_landmarker.task"',
-                language='powershell')
-        st.caption('Python 3.12 is recommended. Use the same Python environment for Streamlit '
-                   'and the camera. Your previous Python 3.15 environment could not install Pygame.')
-    a,b=st.columns(2)
-    with a:
-        camera_index=st.selectbox('Webcam device number',[0,1,2,3],key='webcam_device',help=DEVICE_HELP)
-    with b:
-        sensitivity=st.selectbox('Tap sensitivity',['normal','high','low'],key='webcam_sensitivity')
-    if not (current and current.is_running()) and not issues:
-        camera_preview(camera_index,'coach')
-
-    if requested_mode=='coach':
-        goal=st.selectbox('Coaching focus',GOALS,key='webcam_coach_goal')
-        st.caption('Wrong key taps are recorded; they do not advance the mission.')
-    else:
-        st.info('Creative Jam has no right/wrong score. Play a phrase, then press J in '
-                'the camera window. The coach will choose a follow-up exploration prompt.')
-
-    camera_running=bool(current and current.is_running())
-    if not camera_running and not issues:
-        btn_label=('🎯 Plan mission and start webcam' if requested_mode=='coach' and not db.coach_active(learner)
-                   else '📷 Start webcam coach')
-        if st.button(btn_label,type='primary',key='start-integrated-webcam'):
-            try:
-                if requested_mode=='coach' and not db.coach_active(learner):
-                    with st.spinner('AI coach is choosing a keyboard exercise...'):
-                        outcome=next_piano_mission(learner,st.session_state.tutor_mode,goal)
-                    st.session_state.coach_warning=outcome.get('warning')
-                session=launch_webcam(learner,mode=requested_mode,
-                                     controller=st.session_state.tutor_mode,
-                                     camera=camera_index,sensitivity=sensitivity)
-                st.session_state.webcam_session=session
-                st.rerun()
-            except (ValueError,RuntimeError,OSError) as exc:
-                st.error('Could not start the webcam: '+str(exc))
-    if camera_running:
-        a,b=st.columns(2)
-        with a:
-            if st.button('Stop webcam',key='stop-integrated-webcam'):
-                stop_webcam(current)
-                st.rerun()
-        with b:
-            if st.button('Force close unresponsive camera',key='force-stop-webcam'):
-                stop_webcam(current,force=True)
-                st.rerun()
-    if st.session_state.get('coach_warning') and requested_mode=='coach':
-        st.warning(st.session_state.coach_warning)
-    webcam_coach_live_status(learner,studio)
-    if requested_mode=='coach' and db.coach_active(learner):
-        if st.button('Cancel guided mission (no score)',key='cancel-webcam-coach'):
-            db.cancel_coach_mission(learner)
-            st.rerun()
-    st.caption('Judging evidence: open Progress → Actual tool execution log. '
-               'source=gemini indicates a real Gemini tool call; source=rules indicates offline fallback.')
-
-
 def show_piano(learner):
     st.title('🎹 Interactive Virtual Piano')
     st.caption('24 playable keys: C4 to B5, including all black keys. Sound plays immediately when clicked.')
     mode=st.radio('Practice mode',
-                  ['AI Piano Coach','Free Play','Learn the Notes','Follow the Notes','Note Challenge','Melody Practice'],
+                  ['AI Piano Coach','Free Play','Learn the Notes'],
                   horizontal=True)
     if mode=='AI Piano Coach':
         show_piano_coach(learner)
@@ -791,24 +493,7 @@ def show_piano(learner):
                           help=INPUT_HELP)
     # Remembered outside the widget so the Training page knows which input to offer for piano exercises.
     st.session_state.exercise_input=input_method
-    if input_method!=INPUT_WINDOW and webcam_free_running(learner):
-        st.caption('📷 The webcam table piano is still running, so its taps still count as key presses.')
-        if st.button('Stop webcam',key='stop-free-from-screen'):
-            stop_webcam(st.session_state.webcam_session)
-            st.rerun()
-    if mode in PIANO_EXERCISE_MODES:
-        if not db.get_profile(learner)['assessment_complete']:
-            st.warning('Complete the initial assessment to unlock scored piano challenges.')
-        elif not db.active(learner):
-            if st.button('Ask tutor for a piano exercise',type='primary'):
-                with st.spinner('Selecting a piano exercise...'):
-                    st.session_state.agent_message=next_activity(learner,st.session_state.tutor_mode,
-                                                                 requested_skill='piano' if mode!='Melody Practice' else 'melody',
-                                                                 requested_type=('piano_note' if mode=='Note Challenge' else 'piano_follow' if mode=='Follow the Notes' else 'melody_repeat'))
-                set_page('Training')
-        else:
-            st.info('An active exercise is available on the Training screen.')
-            if st.button('Open active challenge'):set_page('Training')
+
     if mode=='Learn the Notes':
         selected=st.selectbox('Explore a note',list(ALL_KEYS),key='learn_note')
         info=note_info(selected)
@@ -819,10 +504,7 @@ def show_piano(learner):
     if pressed:st.success('You played '+pressed)
     st.caption('Free play and guided challenges are available. The AI Piano Coach observes played keys and plans the next keyboard mission.')
     # Rendered last so Learn the Notes compares taps with the note chosen above.
-    if input_method==INPUT_WINDOW:
-        st.divider()
-        show_webcam_freeplay(learner,mode)
-    elif input_method==INPUT_BROWSER:
+    if input_method==INPUT_BROWSER:
         st.divider()
         show_browser_webcam(learner,mode)
 
@@ -844,9 +526,6 @@ def show_browser_webcam(learner, piano_mode):
             else:st.warning('You played '+tapped[-1]+'. The selected note is '+str(target)+'.')
         else:
             st.info('Tap **'+str(target)+'** on the keyboard drawn over your table.')
-    elif piano_mode in PIANO_EXERCISE_MODES:
-        st.info('Ask the tutor for a piano exercise above. On the Training page the camera opens again, '
-                'and your table taps are entered as your answer.')
     st.caption('📷 Recent webcam taps: '+(' → '.join(recent) if recent else 'none yet'))
 
 
