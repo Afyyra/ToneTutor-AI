@@ -15,7 +15,7 @@ This version extends the corrected ToneTutor AI application with **agent-directe
 
 ## NEW: AI Piano Coach
 
-On **Piano → AI Piano Coach**, choose one of two studios and choose an input method: **On-screen piano** or **Webcam table piano (MediaPipe)**:
+On **Piano → AI Piano Coach**, choose one of two studios and choose an input method: **On-screen piano** or **Webcam in browser**:
 
 ### Guided Missions
 
@@ -80,26 +80,12 @@ In this prepared package **29 automated tests passed locally**, including a mock
 
 Also see [`NABC_BMC_PRODUCT_CASE.md`](NABC_BMC_PRODUCT_CASE.md) for the need, approach, benefits, competition, and business model framing.
 
-## Optional webcam-based table piano (MediaPipe)
-
-This source also includes an **optional local desktop camera companion** implemented with MediaPipe Hand Landmarker, OpenCV perspective calibration and Pygame polyphonic playback. It supports two-octave C4–B5 keyboard hitboxes, a conservative motion-based **tap estimate**, live Guided Mission scoring saved to the same learner-scoped SQLite database, and Creative Jam phrase capture.
-
-**Setup:** see [`TABLE_PIANO_SETUP.md`](TABLE_PIANO_SETUP.md). Install extra dependencies using `requirements-webcam.txt` **only if you use the webcam mode**. The Streamlit/Google Gen AI SDK framework and main `requirements.txt` are unchanged. A normal RGB webcam does not physically sense desk contact. All video is processed locally; it is not retained or sent to Gemini.
-
-
-## Unified AI Webcam Piano Coach (NEW)
-
-The MediaPipe table piano is now an **input method inside AI Piano Coach**, not a separate training mode. Choose **Piano → AI Piano Coach → Guided Missions/Creative Jam → Webcam table piano (MediaPipe)**. You can plan a mission and launch the local OpenCV camera with **one button**. Progress is displayed automatically inside Streamlit, and completed webcam missions inform the next Gemini-selected mission. Creative Jam directions from the webcam are visible in the same page.
-
-The webcam preview still opens in its own local desktop window for table calibration and finger tracking; it is **not a live browser video stream**. Video remains local. Only note names, scores and coaching decisions are stored. See `UNIFIED_WEBCAM_COACH_SETUP.md` for Windows installation and the **Python 3.12** fix for Pygame. MediaPipe, OpenCV and Pygame are optional added libraries; the original Python/Streamlit/Gemini framework is unchanged.
-
 ## Webcam piano in the browser (works online)
 
 Every piano mode, including AI Piano Coach, now offers three inputs under **How will you play?**:
 
 - **On-screen piano**: click the keys.
 - **Webcam in browser (works online)**: the camera, MediaPipe hand tracking and tap detection run inside the learner's own browser (`webcam_component/webcam_piano.mjs`). Only the note names that are tapped are sent to Python, so it also works when ToneTutor is hosted online. Keys are drawn in perspective over the live picture of your table; use **Calibrate corners** to fit them to a paper keyboard or table area.
-- **Webcam window (this laptop only)**: the original OpenCV desktop window (`table_piano.py`). It uses the camera of the computer running Streamlit, so it cannot work on a hosted app.
 
 The browser webcam needs Chrome or Edge on an `https://` or `localhost` page and camera permission. The first start downloads the MediaPipe hand model (a few seconds). Python still checks every answer and mission exactly as for on-screen key presses. Its keyboard layout and tap detector are ports of `table_piano_core.py`, and `tests/test_browser_webcam.py` checks them against the Python originals (using Node.js when available).
 
