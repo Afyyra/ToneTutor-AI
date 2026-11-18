@@ -46,9 +46,9 @@ class TapHandOffTests(unittest.TestCase):
             {'id': 1, 'note': 'C4'}, {'id': '2', 'note': 'D4'}, {'id': 3, 'note': 'H9'}, {'id': True, 'note': 'E4'}]}))
         self.assertEqual((nonce, taps), ('n', [(1, 'C4')]))
 
-    def test_sensitivity_matches_desktop_window(self):
-        self.assertEqual(SENSITIVITY['normal'], {'min_down_y': 6.0, 'min_depth_delta': 0.014,
-                                                 'min_y_velocity': 90.0, 'min_z_velocity': 0.16})
+    def test_normal_sensitivity_matches_reference_detector(self):
+        reference = TapDetector()
+        self.assertEqual(SENSITIVITY['normal'], {k: getattr(reference, k) for k in SENSITIVITY['normal']})
         self.assertEqual(set(SENSITIVITY), {'low', 'normal', 'high'})
 
 

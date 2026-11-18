@@ -1,9 +1,8 @@
 """Browser webcam piano: the camera runs in the learner's own browser, so it works online.
 
-The desktop webcam window (table_piano.py) can only use the camera of the computer running
-Streamlit, which on a hosted app is the server. This component instead runs camera capture,
-MediaPipe hand tracking and tap detection inside the browser and sends only note names to
-Python. Grading, coaching and storage stay in Python exactly as for on-screen key presses.
+Camera capture, MediaPipe hand tracking and tap detection all run inside the browser, and only
+note names are sent to Python. Grading, coaching and storage stay in Python exactly as for
+on-screen key presses.
 """
 import json
 from pathlib import Path
@@ -46,7 +45,7 @@ CSS = '''
 '''
 WEBCAM = st.components.v2.component('tonetutor_browser_webcam', html=HTML, css=CSS, js=JS)
 
-# Same thresholds as the desktop webcam window (table_piano.py).
+# Tap thresholds; "normal" equals the reference TapDetector defaults in table_piano_core.py.
 SENSITIVITY = {
     'low': {'min_down_y': 9.0, 'min_depth_delta': 0.020, 'min_y_velocity': 120.0, 'min_z_velocity': 0.23},
     'normal': {'min_down_y': 6.0, 'min_depth_delta': 0.014, 'min_y_velocity': 90.0, 'min_z_velocity': 0.16},

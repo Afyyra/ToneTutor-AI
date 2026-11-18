@@ -1,4 +1,7 @@
-"""Pure geometry and conservative gesture state for an optional webcam table piano.
+"""Reference geometry, smoothing and gesture logic for the browser webcam piano.
+
+webcam_component/webcam_piano.mjs is a JavaScript port of this module, and
+tests/test_browser_webcam.py checks that both behave identically.
 
 MediaPipe's single RGB camera cannot recover a measured fingertip-to-table distance.
 We therefore use a heuristic approach/deceleration gesture, plus a release requirement,

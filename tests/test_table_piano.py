@@ -46,38 +46,37 @@ class TablePianoTests(unittest.TestCase):
             self.assertIsNone(detector.update(fid, 'D4', 120.0 + index*.1, -.055, index*.04))
         self.assertIsNone(detector.update(fid, None, 125, -.055, .5))
 
-    def test_webcam_taps_persist_and_finish_mission(self):
+    def test_webcam_mission_is_recorded_and_informs_next_mission(self):
         with tempfile.TemporaryDirectory() as temp:
             with patch.object(db, 'DB', Path(temp)/'test.db'):
                 db.initialize()
                 db.ensure_learner('CAMERA-1')
                 db.ensure_learner('CAMERA-2')
                 mission = db.start_coach_mission('CAMERA-1', 'middle_c', ['C4','D4','C4'], 'Test webcam inputs')
-                status = db.record_table_piano_tap('CAMERA-1', 'G4')
-                self.assertFalse(status['correct'])
-                self.assertEqual(status['correct_notes'], 0)
-                self.assertEqual(db.table_piano_progress('CAMERA-1', mission['id'])['mistakes'], 1)
-                self.assertEqual(db.table_piano_progress('CAMERA-2', mission['id'])['presses'], 0)
-                for n in ['C4','D4']:
-                    self.assertFalse(db.record_table_piano_tap('CAMERA-1', n)['finished'])
-                completed = db.record_table_piano_tap('CAMERA-1','C4')
-                self.assertTrue(completed['finished'])
+                with self.assertRaisesRegex(ValueError, 'Unknown'):
+                    db.complete_coach_mission('CAMERA-2', mission['id'], ['C4','D4','C4'])
+                result = db.complete_coach_mission('CAMERA-1', mission['id'], ['G4','C4','D4','C4'],
+                                                   input_source='browser_webcam')
+                self.assertEqual((result['mistakes'], result['accuracy']), (1, .75))
                 self.assertIsNone(db.coach_active('CAMERA-1'))
                 history = db.coach_history('CAMERA-1')
-                self.assertEqual(history[0]['mistakes'],1)
-                self.assertEqual(history[0]['accuracy'],.75)
+                self.assertEqual(history[0]['input_source'], 'browser_webcam')
+                self.assertEqual(history[0]['mistakes'], 1)
                 self.assertIn('piano_history', get_context('CAMERA-1'))
                 self.assertEqual(next_piano_mission('CAMERA-1','rules')['mode'],'rules')
 
-    def test_no_active_mission_or_invalid_note_is_rejected(self):
+    def test_invalid_mission_results_are_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
             with patch.object(db, 'DB', Path(temp)/'test.db'):
                 db.initialize()
                 db.ensure_learner('CAMERA-1')
-                with self.assertRaisesRegex(ValueError,'No active'):
-                    db.record_table_piano_tap('CAMERA-1','C4')
-                with self.assertRaisesRegex(ValueError,'Unsupported'):
-                    db.record_table_piano_tap('CAMERA-1','C10')
+                mission = db.start_coach_mission('CAMERA-1', 'middle_c', ['C4','D4'], 'Test')
+                with self.assertRaisesRegex(ValueError, 'Invalid input source'):
+                    db.complete_coach_mission('CAMERA-1', mission['id'], ['C4','D4'], input_source='mediapipe_webcam')
+                with self.assertRaisesRegex(ValueError, 'Invalid piano note trace'):
+                    db.complete_coach_mission('CAMERA-1', mission['id'], ['C10'])
+                with self.assertRaisesRegex(ValueError, 'Finish all required notes'):
+                    db.complete_coach_mission('CAMERA-1', mission['id'], ['C4'])
 
 
 if __name__ == '__main__':
